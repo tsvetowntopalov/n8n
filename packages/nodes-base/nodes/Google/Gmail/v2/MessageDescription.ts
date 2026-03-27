@@ -258,6 +258,22 @@ export const messageFields: INodeProperties[] = [
 				default: '',
 			},
 			{
+				displayName: 'From Alias Name or ID',
+				name: 'fromAlias',
+				type: 'options',
+				default: '',
+				description:
+					'Select the alias to send the email from. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				typeOptions: {
+					loadOptionsMethod: 'getGmailAliases',
+				},
+				displayOptions: {
+					hide: {
+						'/operation': ['reply'],
+					},
+				},
+			},
+			{
 				displayName: 'Sender Name',
 				name: 'senderName',
 				type: 'string',
