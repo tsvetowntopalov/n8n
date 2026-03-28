@@ -1,9 +1,6 @@
 import type {
-	ICredentialsDecrypted,
-	ICredentialTestFunctions,
 	IDataObject,
 	IExecuteFunctions,
-	INodeCredentialTestResult,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeBaseDescription,
@@ -38,7 +35,6 @@ import {
 	simplifyOutput,
 	unescapeSnippets,
 } from '../GenericFunctions';
-import { getGoogleAccessToken } from '../../GenericFunctions';
 import { replyToEmail } from '../utils/replyToEmail';
 
 const versionDescription: INodeTypeDescription = {
@@ -59,7 +55,6 @@ const versionDescription: INodeTypeDescription = {
 		{
 			name: 'googleApi',
 			required: true,
-			testedBy: 'testGmailServiceAccountAuth',
 			displayOptions: {
 				show: {
 					authentication: ['serviceAccount'],
@@ -170,32 +165,6 @@ export class GmailV2 implements INodeType {
 			getLabels,
 			getThreadMessages,
 			getGmailAliases,
-		},
-		credentialTest: {
-			async testGmailServiceAccountAuth(
-				this: ICredentialTestFunctions,
-				credential: ICredentialsDecrypted,
-			): Promise<INodeCredentialTestResult> {
-				try {
-					const { access_token } = await getGoogleAccessToken.call(
-						this,
-						credential.data as IDataObject,
-						'gmail',
-					);
-					if (!access_token) {
-						return {
-							status: 'Error',
-							message: 'No access token returned. Check your credentials.',
-						};
-					}
-					return { status: 'OK', message: 'Connection successful!' };
-				} catch (err) {
-					return {
-						status: 'Error',
-						message: `${(err as Error).message}`,
-					};
-				}
-			},
 		},
 	};
 
