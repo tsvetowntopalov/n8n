@@ -91,13 +91,26 @@ export class CredentialsTester {
 	getCredentialTestFunction(
 		credentialType: string,
 	): ICredentialTestFunction | ICredentialTestRequestData | undefined {
+		return this.getAllCredentialTestFunctions(credentialType)[0];
+	}
+
+	/**
+	 * Collects all available test functions for a credential type across all supporting nodes.
+	 * Multiple nodes may register tests for the same credential type (e.g. googleChat and gmail
+	 * both register tests for googleApi). Returning all candidates allows callers to try each
+	 * in order until one succeeds, rather than being stuck with whichever node happens to be
+	 * listed first.
+	 */
+	private getAllCredentialTestFunctions(
+		credentialType: string,
+	): Array<ICredentialTestFunction | ICredentialTestRequestData> {
 		// Check if test is defined on credentials
 		const type = this.credentialTypes.getByName(credentialType);
 		if (type.test) {
-			return {
-				testRequest: type.test,
-			};
+			return [{ testRequest: type.test }];
 		}
+
+		const results: Array<ICredentialTestFunction | ICredentialTestRequestData> = [];
 
 		const supportedNodes = this.credentialTypes.getSupportedNodes(credentialType);
 		for (const nodeName of supportedNodes) {
@@ -116,31 +129,35 @@ export class CredentialsTester {
 
 			// Check each of the node versions for credential tests
 			for (const nodeType of allNodeTypes) {
-				// Check each of teh credentials
+				// Check each of the credentials
 				for (const { name, testedBy } of nodeType.description.credentials ?? []) {
 					if (
 						name === credentialType &&
 						(this.credentialTypes.getParentTypes(name).includes('oAuth2Api') ||
 							name === 'oAuth2Api')
 					) {
-						return async function oauth2CredTest(
-							this: ICredentialTestFunctions,
-							cred: ICredentialsDecrypted,
-						): Promise<INodeCredentialTestResult> {
-							return CredentialsTester.hasAccessToken(cred)
-								? {
-										status: 'OK',
-										message: OAUTH2_CREDENTIAL_TEST_SUCCEEDED,
-									}
-								: {
-										status: 'Error',
-										message: OAUTH2_CREDENTIAL_TEST_FAILED,
-									};
-						};
+						// OAuth2 credential test is definitive — return immediately
+						return [
+							async function oauth2CredTest(
+								this: ICredentialTestFunctions,
+								cred: ICredentialsDecrypted,
+							): Promise<INodeCredentialTestResult> {
+								return CredentialsTester.hasAccessToken(cred)
+									? {
+											status: 'OK',
+											message: OAUTH2_CREDENTIAL_TEST_SUCCEEDED,
+										}
+									: {
+											status: 'Error',
+											message: OAUTH2_CREDENTIAL_TEST_FAILED,
+										};
+							},
+						];
 					}
 
 					if (name === credentialType && !!testedBy) {
 						if (typeof testedBy === 'string') {
+							let testFn: ICredentialTestFunction | undefined;
 							if (node instanceof VersionedNodeType) {
 								// The node is versioned. So check all versions for test function
 								// starting with the latest
@@ -149,25 +166,27 @@ export class CredentialsTester {
 									const versionedNode = node.nodeVersions[parseInt(version, 10)];
 									const credentialTest = versionedNode.methods?.credentialTest;
 									if (credentialTest && testedBy in credentialTest) {
-										return credentialTest[testedBy];
+										testFn = credentialTest[testedBy];
+										break;
 									}
 								}
+							} else {
+								// Test is defined as string which links to a function
+								testFn = (node as unknown as INodeType).methods?.credentialTest?.[testedBy];
 							}
-							// Test is defined as string which links to a function
-							return (node as unknown as INodeType).methods?.credentialTest![testedBy];
+							if (testFn && !results.includes(testFn)) {
+								results.push(testFn);
+							}
+						} else {
+							// Test is defined as JSON with a definition for the request to make
+							results.push({ nodeType, testRequest: testedBy });
 						}
-
-						// Test is defined as JSON with a definition for the request to make
-						return {
-							nodeType,
-							testRequest: testedBy,
-						};
 					}
 				}
 			}
 		}
 
-		return undefined;
+		return results;
 	}
 
 	private redactSecrets(
@@ -194,8 +213,8 @@ export class CredentialsTester {
 		credentialType: string,
 		credentialsDecrypted: ICredentialsDecrypted,
 	): Promise<INodeCredentialTestResult> {
-		const credentialTestFunction = this.getCredentialTestFunction(credentialType);
-		if (credentialTestFunction === undefined) {
+		const credentialTestFunctions = this.getAllCredentialTestFunctions(credentialType);
+		if (credentialTestFunctions.length === 0) {
 			return {
 				status: 'Error',
 				message: 'No testing function found for this credential.',
@@ -229,24 +248,53 @@ export class CredentialsTester {
 			}
 		}
 
-		if (typeof credentialTestFunction === 'function') {
+		// Separate function-based tests from request-based tests
+		const functionTests = credentialTestFunctions.filter(
+			(fn): fn is ICredentialTestFunction => typeof fn === 'function',
+		);
+		const requestTest = credentialTestFunctions.find(
+			(fn): fn is ICredentialTestRequestData => typeof fn !== 'function',
+		);
+
+		// Try all function-based tests in order, returning on first success.
+		// This allows nodes that share a credential type (e.g. googleChat and gmail both
+		// use googleApi) to each attempt the test — the first one whose scopes are
+		// authorized for this particular service account will succeed.
+		let lastFunctionResult: INodeCredentialTestResult | undefined;
+		for (const credentialTestFunction of functionTests) {
 			// The credentials get tested via a function that is defined on the node
 			const context = new CredentialTestContext();
 			const functionResult = credentialTestFunction.call(context, credentialsDecrypted);
+			let result: INodeCredentialTestResult;
 			if (functionResult instanceof Promise) {
-				const result = await functionResult;
-				if (typeof result?.message === 'string') {
-					// Anonymize secret values in the error message
-					result.message = this.redactSecrets(
-						result.message,
-						credentialsDecrypted.data,
-						credentialsDataSecretKeys,
-					);
-				}
-				return result;
+				result = await functionResult;
+			} else {
+				result = functionResult;
 			}
-			return functionResult;
+			if (typeof result?.message === 'string') {
+				// Anonymize secret values in the error message
+				result.message = this.redactSecrets(
+					result.message,
+					credentialsDecrypted.data,
+					credentialsDataSecretKeys,
+				);
+			}
+			if (result.status === 'OK') return result;
+			lastFunctionResult = result;
 		}
+
+		// If at least one function test ran but all failed, return the last error
+		if (lastFunctionResult) return lastFunctionResult;
+
+		// No function tests found — fall through to request-based test
+		if (!requestTest) {
+			return {
+				status: 'Error',
+				message: 'No testing function found for this credential.',
+			};
+		}
+
+		const credentialTestFunction = requestTest;
 
 		// Credentials get tested via request instructions
 
