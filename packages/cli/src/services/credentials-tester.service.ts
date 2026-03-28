@@ -114,7 +114,14 @@ export class CredentialsTester {
 
 		const supportedNodes = this.credentialTypes.getSupportedNodes(credentialType);
 		for (const nodeName of supportedNodes) {
-			const node = this.nodeTypes.getByName(nodeName);
+			let node: INodeType | IVersionedNodeType;
+			try {
+				node = this.nodeTypes.getByName(nodeName);
+			} catch {
+				// Node not in registry (e.g. enterprise or tool-variant nodes) — skip
+				continue;
+			}
+			if (!node) continue;
 
 			// Always set to an array even if node is not versioned to not having
 			// to duplicate the logic
