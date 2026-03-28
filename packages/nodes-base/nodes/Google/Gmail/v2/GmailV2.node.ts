@@ -1,6 +1,9 @@
 import type {
+	ICredentialsDecrypted,
+	ICredentialTestFunctions,
 	IDataObject,
 	IExecuteFunctions,
+	INodeCredentialTestResult,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeBaseDescription,
@@ -23,6 +26,7 @@ import {
 	SEND_AND_WAIT_WAITING_TOOLTIP,
 	sendAndWaitWebhook,
 } from '../../../../utils/sendAndWait/utils';
+import { getGoogleAccessToken } from '../../GenericFunctions';
 import {
 	encodeEmail,
 	googleApiRequest,
@@ -55,6 +59,7 @@ const versionDescription: INodeTypeDescription = {
 		{
 			name: 'googleApi',
 			required: true,
+			testedBy: 'testGmailServiceAccountAuth',
 			displayOptions: {
 				show: {
 					authentication: ['serviceAccount'],
@@ -165,6 +170,26 @@ export class GmailV2 implements INodeType {
 			getLabels,
 			getThreadMessages,
 			getGmailAliases,
+		},
+		credentialTest: {
+			async testGmailServiceAccountAuth(
+				this: ICredentialTestFunctions,
+				credential: ICredentialsDecrypted,
+			): Promise<INodeCredentialTestResult> {
+				try {
+					const response = await getGoogleAccessToken.call(
+						this,
+						credential.data as IDataObject,
+						'gmail',
+					);
+					if (response.access_token) {
+						return { status: 'OK', message: 'Connection successful!' };
+					}
+					return { status: 'Error', message: JSON.stringify(response) };
+				} catch (err) {
+					return { status: 'Error', message: (err as Error).message };
+				}
+			},
 		},
 	};
 
